@@ -1,4 +1,149 @@
 <!doctype html>
-<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KU Week 01 — Camera & Mic Test</title><style>body{font-family:system-ui,sans-serif;max-width:850px;margin:24px auto;padding:0 16px;color:#172b40}button{padding:10px 14px;margin:4px;border:1px solid #abc;border-radius:8px;background:#f5f9ff;cursor:pointer}video{width:100%;max-width:600px;background:#111;border-radius:10px}pre{background:#f1f4f8;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere}#status{font-weight:600}small{color:#596779}</style></head><body><h2>Week 01 — Camera & Microphone Test</h2><p>ทดสอบการเข้าถึงอุปกรณ์บน GitHub Pages (HTTPS) โดยไม่บันทึกหรือส่งภาพและเสียงไปยังเซิร์ฟเวอร์</p><p><button id="camera">ทดสอบกล้อง</button><button id="mic">ทดสอบไมโครโฟน</button><button id="both">ทดสอบพร้อมกัน</button><button id="stop">หยุดทั้งหมด</button></p><p id="status" role="status">ยังไม่เริ่มทดสอบ</p><video id="preview" autoplay muted playsinline></video><p id="level">ระดับเสียง: —</p><pre id="log" aria-label="บันทึกการทดสอบ"></pre><small>หากอุปกรณ์ไม่ทำงาน ตรวจสิทธิ์ Camera/Microphone ในเบราว์เซอร์และระบบปฏิบัติการ ไม่ต้องใช้บัญชี Google หรือ Firebase สำหรับหน้านี้</small><script>
-(()=>{'use strict';const $=id=>document.getElementById(id);let stream=null,ctx=null,source=null,analyser=null,raf=0;const log=s=>{$('log').textContent+=new Date().toLocaleTimeString()+' '+s+'\n'};async function stop(){cancelAnimationFrame(raf);if(source){try{source.disconnect()}catch(e){}source=null}if(ctx){try{await ctx.close()}catch(e){}ctx=null}if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}$('preview').srcObject=null;$('level').textContent='ระดับเสียง: —';$('status').textContent='หยุดตรวจแล้ว'}async function start(video,audio){await stop();if(!navigator.mediaDevices?.getUserMedia){$('status').textContent='เบราว์เซอร์ไม่รองรับ getUserMedia';return}try{stream=await navigator.mediaDevices.getUserMedia({video,audio});$('preview').srcObject=video?stream:null;$('status').textContent='เปิดสำเร็จ: '+stream.getTracks().map(t=>t.kind).join(', ');log('OK '+stream.getTracks().map(t=>t.kind).join(', '));if(audio){ctx=new (window.AudioContext||window.webkitAudioContext)();source=ctx.createMediaStreamSource(stream);analyser=ctx.createAnalyser();analyser.fftSize=2048;source.connect(analyser);const a=new Uint8Array(analyser.fftSize);function tick(){analyser.getByteTimeDomainData(a);let sum=0;for(let i=0;i<a.length;i++){const x=(a[i]-128)/128;sum+=x*x}const rms=Math.sqrt(sum/a.length);$('level').textContent='ระดับเสียง RMS: '+rms.toFixed(3)+' (ไม่ใช่การตรวจจับคำพูด)';raf=requestAnimationFrame(tick)}tick()}}catch(e){$('status').textContent='เปิดไม่สำเร็จ: '+e.name;log('ERROR '+e.name+': '+e.message)}}$('camera').onclick=()=>start(true,false);$('mic').onclick=()=>start(false,true);$('both').onclick=()=>start(true,true);$('stop').onclick=()=>{stop();log('STOP')};window.addEventListener('pagehide',()=>{if(stream)stream.getTracks().forEach(t=>t.stop())})})();
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KU Week 01 — Monitoring V5.1</title>
+<style>
+:root{font-family:system-ui,"Noto Sans Thai",sans-serif;color:#173047}*{box-sizing:border-box}
+body{max-width:1050px;margin:20px auto;padding:0 15px;background:#f7f9fb}
+h1{font-size:1.6rem}h2{font-size:1.15rem;margin:0 0 12px}
+.panel{background:white;border:1px solid #d9e2ea;border-radius:12px;padding:18px;margin:14px 0}
+button,input{font:inherit}button{padding:10px 14px;border:1px solid #9bb0c0;border-radius:8px;background:#eaf5ff;margin:4px 4px 4px 0;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}button.primary{background:#087a66;color:white;border-color:#087a66}
+video{width:100%;max-height:340px;background:#111;border-radius:9px;object-fit:contain}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:680px){.cols{grid-template-columns:1fr}}
+small,.muted{color:#536b7b}pre{background:#eef2f6;padding:12px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto}
+.stat{font-weight:700;font-variant-numeric:tabular-nums}.notice{background:#fff7e8;padding:12px;border-radius:8px}
+label{display:block;margin:8px 0}input[type=range]{width:200px;vertical-align:middle}
+</style></head>
+<body>
+<h1>KU Week 01 — Camera & Mic Monitoring V5.1</h1>
+<p>โหมดทดลองบน GitHub Pages (HTTPS) · ตรวจใบหน้าและระดับเสียงในอุปกรณ์ · ยังไม่บันทึกคะแนนหรือส่งภาพ/เสียงไปยังเซิร์ฟเวอร์</p>
+<section class="panel">
+<h2>1. อุปกรณ์และการตรวจจับ</h2>
+<button id="start" class="primary">เปิดกล้องและไมโครโฟน</button>
+<button id="stop" disabled>หยุดตรวจทั้งหมด</button>
+<p id="deviceStatus" role="status">ยังไม่เริ่ม</p>
+<p id="faceStatus">ใบหน้า: ยังไม่ตรวจ</p>
+<p id="micStatus">ไมโครโฟน: ยังไม่ตรวจ</p>
+<label>เกณฑ์ระดับเสียงดัง (RMS): <input id="threshold" type="range" min="0.02" max="0.25" step="0.01" value="0.10"><output id="thresholdValue">0.10</output></label>
+<small>เสียงดังไม่ได้หมายความว่ากำลังพูดคุย และไม่ใช้เป็นเหตุให้สอบตกอัตโนมัติ</small>
+</section>
+<div class="cols">
+<section class="panel"><h2>ภาพกล้อง</h2><video id="cameraView" autoplay playsinline muted></video><small id="faceEngine">Face detector: ยังไม่เริ่ม</small></section>
+<section class="panel"><h2>2. วิดีโอสำหรับทดลอง</h2>
+<label>เลือกวิดีโอจากเครื่อง (ไม่อัปโหลด): <input type="file" id="videoFile" accept="video/*"></label>
+<video id="lesson" controls playsinline></video>
+<p class="muted">ระบบนับเฉพาะช่วงที่วิดีโอกำลังเล่นและกล้อง/ไมค์พร้อม หากหยุดเล่น จะหยุดนับเวลา</p>
+</section>
+</div>
+<section class="panel">
+<h2>3. รายงานการทดลอง</h2>
+<p>เวลาที่เล่นและตรวจได้: <span class="stat" id="watched">0.0</span> วินาที</p>
+<p>ช่วงไม่พบใบหน้า: <span class="stat" id="absent">0.0</span> วินาที</p>
+<p>ช่วงเสียงดัง: <span class="stat" id="loud">0.0</span> วินาที</p>
+<p>ช่วงเหตุการณ์รวม (ไม่นับซ้อน): <span class="stat" id="combined">0.0</span> วินาที</p>
+<p>สัดส่วนเหตุการณ์รวม: <span class="stat" id="percent">—</span></p>
+<p id="result" class="notice">รอเริ่มทดลอง — เกณฑ์เกิน 20% ใช้เพื่อแสดงผลเท่านั้น</p>
+<button id="export">ส่งออกรายงาน JSON</button><button id="reset">ล้างผลทดลอง</button>
+</section>
+<section class="panel"><h2>บันทึกเหตุการณ์</h2><pre id="log"></pre></section>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/face_detection.js"></script>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let stream=null,audioCtx=null,analyser=null,source=null,faceDetector=null,faceReady=false,facePresent=null;
+let busy=false,raf=0,timer=0,lastTick=0,watched=0,absent=0,loud=0,combined=0,logs=[],objectURL=null;
+let micRms=null,deviceReady=false,faceSampleAt=0;
+function log(message){let t=new Date().toLocaleTimeString('th-TH');logs.push({time:new Date().toISOString(),message});$('log').textContent=(t+' '+message+'\n'+$('log').textContent).slice(0,12000)}
+function display(){
+ $('watched').textContent=watched.toFixed(1);$('absent').textContent=absent.toFixed(1);
+ $('loud').textContent=loud.toFixed(1);$('combined').textContent=combined.toFixed(1);
+ $('percent').textContent=watched?((combined/watched)*100).toFixed(1)+'%':'—';
+ $('result').textContent=watched?(combined/watched>0.2?'เหตุการณ์เกิน 20% — ต้องตรวจทาน (ยังไม่ตัดคะแนน)':'เหตุการณ์ไม่เกิน 20% — ผลทดลอง ไม่ใช่การรับรองการเรียน'):'รอเริ่มทดลอง — เกณฑ์เกิน 20% ใช้เพื่อแสดงผลเท่านั้น';
+}
+function stopStream(){
+ if(timer){clearInterval(timer);timer=0}if(raf){cancelAnimationFrame(raf);raf=0}
+ if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+ if(source){try{source.disconnect()}catch(e){}source=null}
+ if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null}
+ analyser=null;deviceReady=false;faceReady=false;facePresent=null;micRms=null;
+ $('cameraView').srcObject=null;$('stop').disabled=true;$('start').disabled=false;
+ $('deviceStatus').textContent='หยุดตรวจแล้ว';$('faceStatus').textContent='ใบหน้า: หยุดตรวจ';
+ $('micStatus').textContent='ไมโครโฟน: หยุดตรวจ';$('lesson').pause();
+}
+async function start(){
+ stopStream();$('start').disabled=true;$('deviceStatus').textContent='กำลังขออนุญาตอุปกรณ์...';
+ try{
+  if(!navigator.mediaDevices?.getUserMedia)throw new Error('เบราว์เซอร์ไม่รองรับ getUserMedia');
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:true});
+  $('cameraView').srcObject=stream;await $('cameraView').play();
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();
+  source=audioCtx.createMediaStreamSource(stream);analyser=audioCtx.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
+  deviceReady=true;$('stop').disabled=false;$('deviceStatus').textContent='เปิดกล้องและไมโครโฟนสำเร็จ';
+  log('เปิดกล้องและไมโครโฟนสำเร็จ');
+  await setupFace();
+  lastTick=performance.now();timer=setInterval(tick,200);
+  monitorAudio();
+ }catch(err){log('ERROR '+err.name+': '+err.message);$('deviceStatus').textContent='เปิดไม่สำเร็จ: '+err.name+' — '+err.message;stopStream();$('deviceStatus').textContent='เปิดไม่สำเร็จ: '+err.name+' — '+err.message}
+}
+async function setupFace(){
+ if(typeof FaceDetection==='undefined'){
+  $('faceEngine').textContent='Face detector โหลดไม่สำเร็จ — ต้องเชื่อมต่ออินเทอร์เน็ตและอนุญาต CDN';log('ไม่สามารถโหลด FaceDetection; ปิดการนับเวลาไม่พบใบหน้า');return;
+ }
+ try{
+  faceDetector=new FaceDetection({locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.4/'+f});
+  faceDetector.setOptions({model:'short',minDetectionConfidence:0.6});
+  faceDetector.onResults(r=>{
+   facePresent=!!(r.detections&&r.detections.length);
+   faceReady=true;$('faceStatus').textContent='ใบหน้า: '+(facePresent?'พบใบหน้า':'ไม่พบใบหน้า');
+  });
+  $('faceEngine').textContent='Face detector: MediaPipe (กำลังตรวจ)';
+  faceLoop();
+ }catch(e){$('faceEngine').textContent='Face detector ไม่พร้อม: '+e.message;log('Face detector ERROR '+e.message)}
+}
+async function faceLoop(){
+ if(!deviceReady)return;
+ if(!busy&&$('cameraView').readyState>=2){
+  busy=true;
+  try{await faceDetector.send({image:$('cameraView')})}catch(e){faceReady=false;$('faceEngine').textContent='Face detector ขัดข้อง: '+e.message;log('Face detection ERROR '+e.message)}
+  finally{busy=false}
+ }
+ if(deviceReady)setTimeout(faceLoop,350);
+}
+function monitorAudio(){
+ if(!deviceReady||!analyser)return;
+ let data=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(data);
+ let sum=0;for(let i=0;i<data.length;i++)sum+=data[i]*data[i];
+ micRms=Math.sqrt(sum/data.length);
+ $('micStatus').textContent='ไมโครโฟน RMS: '+micRms.toFixed(3)+(micRms>Number($('threshold').value)?' (เสียงดัง)':'');
+ raf=requestAnimationFrame(monitorAudio);
+}
+function tick(){
+ const now=performance.now(),dt=Math.min((now-lastTick)/1000,0.4);lastTick=now;
+ if(!deviceReady||$('lesson').paused||$('lesson').ended)return;
+ // Do not count intervals without a working face detector, or without microphone data.
+ if(!faceReady||micRms===null){$('result').textContent='กำลังรอตัวตรวจใบหน้าหรือไมโครโฟน — ยังไม่นับเวลา';return}
+ const noFace=facePresent===false,highSound=micRms>Number($('threshold').value);
+ watched+=dt;if(noFace)absent+=dt;if(highSound)loud+=dt;if(noFace||highSound)combined+=dt;
+ display();
+}
+$('start').onclick=start;$('stop').onclick=()=>{stopStream();log('หยุดตรวจ')};
+$('threshold').oninput=()=>{$('thresholdValue').textContent=Number($('threshold').value).toFixed(2)};
+$('videoFile').onchange=e=>{
+ const f=e.target.files?.[0];if(!f)return;
+ if(objectURL)URL.revokeObjectURL(objectURL);
+ objectURL=URL.createObjectURL(f);$('lesson').src=objectURL;log('เลือกวิดีโอ '+f.name+' (ไฟล์อยู่ในเครื่อง)');
+};
+$('lesson').addEventListener('play',()=>{if(!deviceReady){$('lesson').pause();alert('กรุณาเปิดกล้องและไมโครโฟนก่อนเล่นวิดีโอ');return}log('เริ่มเล่นวิดีโอ')});
+$('lesson').addEventListener('pause',()=>log('หยุดเล่นวิดีโอ'));
+$('reset').onclick=()=>{watched=absent=loud=combined=0;logs=[];$('log').textContent='';display();log('ล้างผลทดลอง')};
+$('export').onclick=()=>{
+ const data={version:'5.1-test',createdAt:new Date().toISOString(),watchedSeconds:+watched.toFixed(2),
+ noFaceSeconds:+absent.toFixed(2),loudSeconds:+loud.toFixed(2),combinedSeconds:+combined.toFixed(2),
+ eventPercent:watched?+(combined/watched*100).toFixed(2):null,thresholdRms:Number($('threshold').value),
+ note:'Experimental client-side data; not verified; no grading',events:logs};
+ const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+ const a=document.createElement('a');a.href=url;a.download='W01_monitor_test_'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+window.addEventListener('pagehide',()=>{if(stream)stream.getTracks().forEach(t=>t.stop())});
+display();log('Monitoring V5.1 พร้อมทดสอบ');
 </script></body></html>
