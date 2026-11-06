@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KU Week 01 — Monitoring V5.1</title>
+<title>KU Week 01 — Monitoring V5.2</title>
 <style>
 :root{font-family:system-ui,"Noto Sans Thai",sans-serif;color:#173047}*{box-sizing:border-box}
 body{max-width:1050px;margin:20px auto;padding:0 15px;background:#f7f9fb}
@@ -15,7 +15,7 @@ small,.muted{color:#536b7b}pre{background:#eef2f6;padding:12px;border-radius:8px
 label{display:block;margin:8px 0}input[type=range]{width:200px;vertical-align:middle}
 </style></head>
 <body>
-<h1>KU Week 01 — Camera & Mic Monitoring V5.1</h1>
+<h1>KU Week 01 — Camera & Mic Monitoring V5.2</h1>
 <p>โหมดทดลองบน GitHub Pages (HTTPS) · ตรวจใบหน้าและระดับเสียงในอุปกรณ์ · ยังไม่บันทึกคะแนนหรือส่งภาพ/เสียงไปยังเซิร์ฟเวอร์</p>
 <section class="panel">
 <h2>1. อุปกรณ์และการตรวจจับ</h2>
@@ -24,6 +24,9 @@ label{display:block;margin:8px 0}input[type=range]{width:200px;vertical-align:mi
 <p id="deviceStatus" role="status">ยังไม่เริ่ม</p>
 <p id="faceStatus">ใบหน้า: ยังไม่ตรวจ</p>
 <p id="micStatus">ไมโครโฟน: ยังไม่ตรวจ</p>
+<p id="vadStatus">ลักษณะคล้ายเสียงพูด (ทดลอง): ยังไม่ตรวจ</p>
+<label><input type="checkbox" id="vadEnabled" checked> เปิดตัวชี้วัดเสียงคล้ายคำพูด (VAD แบบประมาณค่า)</label>
+<small>ตัวชี้วัด VAD นี้เป็นการประมาณจากความแปรผันของพลังงานเสียง ไม่ใช่การรู้จำคำพูด และแยกเพลงจากคำพูดไม่ได้อย่างน่าเชื่อถือ</small>
 <label>เกณฑ์ระดับเสียงดัง (RMS): <input id="threshold" type="range" min="0.02" max="0.25" step="0.01" value="0.10"><output id="thresholdValue">0.10</output></label>
 <small>เสียงดังไม่ได้หมายความว่ากำลังพูดคุย และไม่ใช้เป็นเหตุให้สอบตกอัตโนมัติ</small>
 </section>
@@ -40,6 +43,10 @@ label{display:block;margin:8px 0}input[type=range]{width:200px;vertical-align:mi
 <p>เวลาที่เล่นและตรวจได้: <span class="stat" id="watched">0.0</span> วินาที</p>
 <p>ช่วงไม่พบใบหน้า: <span class="stat" id="absent">0.0</span> วินาที</p>
 <p>ช่วงเสียงดัง: <span class="stat" id="loud">0.0</span> วินาที</p>
+<p>ช่วงเสียงคล้ายคำพูด (ประมาณค่า): <span class="stat" id="speech">0.0</span> วินาที</p>
+<p>ความครอบคลุมของวิดีโอ (ช่วงเวลาที่รับชมจริงแบบไม่ซ้ำ): <span class="stat" id="coverage">—</span></p>
+<p>ช่วงตรวจสอบไม่ได้: <span class="stat" id="unverified">0.0</span> วินาที</p>
+<p class="muted">การเล่นข้ามช่วงหรือย้อนซ้ำไม่ทำให้ความครอบคลุมเพิ่มโดยอัตโนมัติ</p>
 <p>ช่วงเหตุการณ์รวม (ไม่นับซ้อน): <span class="stat" id="combined">0.0</span> วินาที</p>
 <p>สัดส่วนเหตุการณ์รวม: <span class="stat" id="percent">—</span></p>
 <p id="result" class="notice">รอเริ่มทดลอง — เกณฑ์เกิน 20% ใช้เพื่อแสดงผลเท่านั้น</p>
@@ -53,19 +60,38 @@ const $=id=>document.getElementById(id);
 let stream=null,audioCtx=null,analyser=null,source=null,faceDetector=null,faceReady=false,facePresent=null;
 let busy=false,raf=0,timer=0,lastTick=0,watched=0,absent=0,loud=0,combined=0,logs=[],objectURL=null;
 let micRms=null,deviceReady=false,faceSampleAt=0;
+let speech=0,unverified=0,voiceLike=false,energyHistory=[],timeline=[],currentEvent=null;
+let coverageBins=new Set(),lastVideoTime=null,previousPlaybackTime=null,faceLastResultAt=0;
+let lastState='idle',playbackSamples=0;
+function setEventState(state){
+ if(state===lastState)return;
+ const now=new Date().toISOString();
+ if(currentEvent){currentEvent.end=now;timeline.push(currentEvent)}
+ currentEvent=state==='idle'?null:{state,start:now,end:null};lastState=state;
+ log('สถานะการตรวจ: '+state);
+}
 function log(message){let t=new Date().toLocaleTimeString('th-TH');logs.push({time:new Date().toISOString(),message});$('log').textContent=(t+' '+message+'\n'+$('log').textContent).slice(0,12000)}
 function display(){
  $('watched').textContent=watched.toFixed(1);$('absent').textContent=absent.toFixed(1);
  $('loud').textContent=loud.toFixed(1);$('combined').textContent=combined.toFixed(1);
  $('percent').textContent=watched?((combined/watched)*100).toFixed(1)+'%':'—';
- $('result').textContent=watched?(combined/watched>0.2?'เหตุการณ์เกิน 20% — ต้องตรวจทาน (ยังไม่ตัดคะแนน)':'เหตุการณ์ไม่เกิน 20% — ผลทดลอง ไม่ใช่การรับรองการเรียน'):'รอเริ่มทดลอง — เกณฑ์เกิน 20% ใช้เพื่อแสดงผลเท่านั้น';
+ $('speech').textContent=speech.toFixed(1);$('unverified').textContent=unverified.toFixed(1);
+ const duration=$('lesson').duration;
+ const bins=Number.isFinite(duration)&&duration>0?Math.ceil(duration*2):0;
+ $('coverage').textContent=bins?(100*coverageBins.size/bins).toFixed(1)+'%':'—';
+ const coverage=bins?coverageBins.size/bins:0;
+ $('result').textContent=!watched?'รอเริ่มทดลอง — เกณฑ์เกิน 20% ใช้เพื่อแสดงผลเท่านั้น':
+ unverified>0?'มีช่วงตรวจสอบไม่ได้ '+unverified.toFixed(1)+' วินาที — ต้องตรวจทาน ไม่ตัดสินอัตโนมัติ':
+ coverage<0.98?'ยังรับชมวิดีโอไม่ครบ (ความครอบคลุม '+(coverage*100).toFixed(1)+'%) — ผลทดลอง':
+ combined/watched>0.2?'รับชมครบ แต่เหตุการณ์เกิน 20% — ให้ตรวจทาน ไม่ตัดคะแนนอัตโนมัติ':
+ 'รับชมครบและเหตุการณ์ไม่เกิน 20% — ผลทดลอง ไม่ใช่การรับรองการเรียน';
 }
 function stopStream(){
- if(timer){clearInterval(timer);timer=0}if(raf){cancelAnimationFrame(raf);raf=0}
+ if(timer){clearInterval(timer);timer=0}if(raf){cancelAnimationFrame(raf);raf=0}setEventState('idle');
  if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
  if(source){try{source.disconnect()}catch(e){}source=null}
  if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null}
- analyser=null;deviceReady=false;faceReady=false;facePresent=null;micRms=null;
+ analyser=null;deviceReady=false;faceReady=false;facePresent=null;micRms=null;voiceLike=false;faceLastResultAt=0;
  $('cameraView').srcObject=null;$('stop').disabled=true;$('start').disabled=false;
  $('deviceStatus').textContent='หยุดตรวจแล้ว';$('faceStatus').textContent='ใบหน้า: หยุดตรวจ';
  $('micStatus').textContent='ไมโครโฟน: หยุดตรวจ';$('lesson').pause();
@@ -78,6 +104,7 @@ async function start(){
   $('cameraView').srcObject=stream;await $('cameraView').play();
   audioCtx=new (window.AudioContext||window.webkitAudioContext)();await audioCtx.resume();
   source=audioCtx.createMediaStreamSource(stream);analyser=audioCtx.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
+  stream.getTracks().forEach(t=>t.addEventListener('ended',()=>{log('อุปกรณ์หยุดทำงาน: '+t.kind);$('lesson').pause();stopStream()}));
   deviceReady=true;$('stop').disabled=false;$('deviceStatus').textContent='เปิดกล้องและไมโครโฟนสำเร็จ';
   log('เปิดกล้องและไมโครโฟนสำเร็จ');
   await setupFace();
@@ -94,7 +121,7 @@ async function setupFace(){
   faceDetector.setOptions({model:'short',minDetectionConfidence:0.6});
   faceDetector.onResults(r=>{
    facePresent=!!(r.detections&&r.detections.length);
-   faceReady=true;$('faceStatus').textContent='ใบหน้า: '+(facePresent?'พบใบหน้า':'ไม่พบใบหน้า');
+   faceReady=true;faceLastResultAt=performance.now();$('faceStatus').textContent='ใบหน้า: '+(facePresent?'พบใบหน้า':'ไม่พบใบหน้า');
   });
   $('faceEngine').textContent='Face detector: MediaPipe (กำลังตรวจ)';
   faceLoop();
@@ -104,7 +131,7 @@ async function faceLoop(){
  if(!deviceReady)return;
  if(!busy&&$('cameraView').readyState>=2){
   busy=true;
-  try{await faceDetector.send({image:$('cameraView')})}catch(e){faceReady=false;$('faceEngine').textContent='Face detector ขัดข้อง: '+e.message;log('Face detection ERROR '+e.message)}
+  try{await faceDetector.send({image:$('cameraView')})}catch(e){faceReady=false;faceLastResultAt=0;$('faceEngine').textContent='Face detector ขัดข้อง: '+e.message;log('Face detection ERROR '+e.message)}
   finally{busy=false}
  }
  if(deviceReady)setTimeout(faceLoop,350);
@@ -114,16 +141,37 @@ function monitorAudio(){
  let data=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(data);
  let sum=0;for(let i=0;i<data.length;i++)sum+=data[i]*data[i];
  micRms=Math.sqrt(sum/data.length);
+ // Experimental energy modulation heuristic: NOT a validated speech/music classifier.
+ energyHistory.push(micRms);if(energyHistory.length>24)energyHistory.shift();
+ const avg=energyHistory.reduce((a,b)=>a+b,0)/energyHistory.length;
+ const variance=energyHistory.reduce((a,b)=>a+(b-avg)**2,0)/energyHistory.length;
+ voiceLike=$('vadEnabled').checked&&energyHistory.length>=12&&avg>0.015&&Math.sqrt(variance)>0.008;
+ $('vadStatus').textContent='ลักษณะคล้ายเสียงพูด (ทดลอง): '+(voiceLike?'พบความแปรผันของเสียง':'ยังไม่พบลักษณะตามเกณฑ์');
  $('micStatus').textContent='ไมโครโฟน RMS: '+micRms.toFixed(3)+(micRms>Number($('threshold').value)?' (เสียงดัง)':'');
  raf=requestAnimationFrame(monitorAudio);
 }
 function tick(){
  const now=performance.now(),dt=Math.min((now-lastTick)/1000,0.4);lastTick=now;
- if(!deviceReady||$('lesson').paused||$('lesson').ended)return;
- // Do not count intervals without a working face detector, or without microphone data.
- if(!faceReady||micRms===null){$('result').textContent='กำลังรอตัวตรวจใบหน้าหรือไมโครโฟน — ยังไม่นับเวลา';return}
+ const v=$('lesson');
+ if(!deviceReady||v.paused||v.ended||document.hidden){setEventState('idle');previousPlaybackTime=null;return}
+ const faceFresh=faceReady&&(now-faceLastResultAt<1800);
+ const audioFresh=micRms!==null&&stream?.getAudioTracks().some(t=>t.readyState==='live');
+ if(!faceFresh||!audioFresh){unverified+=dt;setEventState('unverified');display();return}
  const noFace=facePresent===false,highSound=micRms>Number($('threshold').value);
- watched+=dt;if(noFace)absent+=dt;if(highSound)loud+=dt;if(noFace||highSound)combined+=dt;
+ // Coverage uses 0.5 s timeline bins, only if playback advances naturally.
+ const videoTime=v.currentTime;
+ if(previousPlaybackTime!==null){
+  const advance=videoTime-previousPlaybackTime;
+  if(advance>=0&&advance<1.0&&advance<=dt*2.5+0.12){
+   const a=Math.floor(previousPlaybackTime*2),b=Math.floor(videoTime*2);
+   for(let i=a;i<=b;i++)if(i>=0&&i<Math.ceil(v.duration*2))coverageBins.add(i);
+  }else if(Math.abs(advance)>1.0){log('ตรวจพบการข้ามช่วงวิดีโอ — ไม่เพิ่มความครอบคลุม')}
+ }
+ previousPlaybackTime=videoTime;
+ watched+=dt;playbackSamples++;
+ if(noFace)absent+=dt;if(highSound)loud+=dt;if(voiceLike)speech+=dt;
+ if(noFace||highSound)combined+=dt;
+ setEventState(noFace&&highSound?'no-face+loud':noFace?'no-face':highSound?'loud':'normal');
  display();
 }
 $('start').onclick=start;$('stop').onclick=()=>{stopStream();log('หยุดตรวจ')};
@@ -131,19 +179,21 @@ $('threshold').oninput=()=>{$('thresholdValue').textContent=Number($('threshold'
 $('videoFile').onchange=e=>{
  const f=e.target.files?.[0];if(!f)return;
  if(objectURL)URL.revokeObjectURL(objectURL);
- objectURL=URL.createObjectURL(f);$('lesson').src=objectURL;log('เลือกวิดีโอ '+f.name+' (ไฟล์อยู่ในเครื่อง)');
+ objectURL=URL.createObjectURL(f);$('lesson').src=objectURL;coverageBins.clear();previousPlaybackTime=null;watched=absent=loud=combined=speech=unverified=0;display();log('เลือกวิดีโอ '+f.name+' (ไฟล์อยู่ในเครื่อง)');
 };
+$('lesson').addEventListener('seeking',()=>{previousPlaybackTime=null;log('ผู้ใช้เลื่อนตำแหน่งวิดีโอ')});
 $('lesson').addEventListener('play',()=>{if(!deviceReady){$('lesson').pause();alert('กรุณาเปิดกล้องและไมโครโฟนก่อนเล่นวิดีโอ');return}log('เริ่มเล่นวิดีโอ')});
-$('lesson').addEventListener('pause',()=>log('หยุดเล่นวิดีโอ'));
-$('reset').onclick=()=>{watched=absent=loud=combined=0;logs=[];$('log').textContent='';display();log('ล้างผลทดลอง')};
+$('lesson').addEventListener('pause',()=>{previousPlaybackTime=null;setEventState('idle');log('หยุดเล่นวิดีโอ')});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){$('lesson').pause();log('ออกจากหน้าเว็บ — หยุดวิดีโอ')}});
+$('reset').onclick=()=>{watched=absent=loud=combined=speech=unverified=0;coverageBins.clear();timeline=[];currentEvent=null;lastState='idle';previousPlaybackTime=null;logs=[];$('log').textContent='';display();log('ล้างผลทดลอง')};
 $('export').onclick=()=>{
- const data={version:'5.1-test',createdAt:new Date().toISOString(),watchedSeconds:+watched.toFixed(2),
+ const data={version:'5.2-test',createdAt:new Date().toISOString(),watchedSeconds:+watched.toFixed(2),
  noFaceSeconds:+absent.toFixed(2),loudSeconds:+loud.toFixed(2),combinedSeconds:+combined.toFixed(2),
- eventPercent:watched?+(combined/watched*100).toFixed(2):null,thresholdRms:Number($('threshold').value),
- note:'Experimental client-side data; not verified; no grading',events:logs};
+ eventPercent:watched?+(combined/watched*100).toFixed(2):null,voiceLikeSeconds:+speech.toFixed(2),unverifiedSeconds:+unverified.toFixed(2),videoCoveragePercent:Number.isFinite($('lesson').duration)?+(coverageBins.size/Math.ceil($('lesson').duration*2)*100).toFixed(2):null,thresholdRms:Number($('threshold').value),eventTimeline:[...timeline,...(currentEvent?[{...currentEvent,end:new Date().toISOString()}]:[])],
+ note:'Experimental client-side data; voice-like signal is heuristic, not speech recognition; not verified; no grading',events:logs};
  const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download='W01_monitor_test_'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
 window.addEventListener('pagehide',()=>{if(stream)stream.getTracks().forEach(t=>t.stop())});
-display();log('Monitoring V5.1 พร้อมทดสอบ');
+display();log('Monitoring V5.2 พร้อมทดสอบ');
 </script></body></html>
